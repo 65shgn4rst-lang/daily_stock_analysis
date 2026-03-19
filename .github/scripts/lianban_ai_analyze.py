@@ -4,6 +4,25 @@ import glob
 import google.generativeai as genai
 from datetime import datetime
 
+import time
+
+def call_gemini_with_retry(model, prompt, max_retries=3):
+    for i in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            error_msg = str(e)
+            print(f"⚠️ 第{i+1}次请求失败: {error_msg}")
+            if "429" in error_msg or "quota" in error_msg.lower() or "resource" in error_msg.lower():
+                wait = 15 * (i + 1)
+                print(f"⏳ 等待{wait}秒后重试...")
+                time.sleep(wait)
+            else:
+                raise e
+    print("❌ 重试耗尽，尝试缩减内容后再请求")
+    return None
+
 def analyze():
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
@@ -118,8 +137,10 @@ def analyze():
 5. 每只股票的策略必须具体可执行，不要空话
 """
 
-    response = model.generate_content(prompt)
-    report = response.text
+    report = call_gemini_with_retry(model, prompt)
+    if not report:
+        print("❌ AI生成失败")
+        return
 
     os.makedirs("reports", exist_ok=True)
     report_path = f"reports/report_{today}.md"
