@@ -41,6 +41,40 @@ def analyze():
 
     with open(data_file, "r", encoding="utf-8") as f:
         data = json.load(f)
+with open(data_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # ===== 新增：精简数据，降低 token 消耗 =====
+    # 保留的字段（去掉不需要的字段）
+    keep_fields = [
+        "股票代码", "股票名称", "连板数", "涨停价", "封板资金",
+        "换手率", "成交额", "首封时间", "炸板次数", "题材",
+        "流通市值", "涨幅"
+    ]
+    
+    def slim(stock):
+        """只保留关键字段"""
+        return {k: v for k, v in stock.items() if k in keep_fields}
+    
+    # 连板股：全部保留，但精简字段
+    lianban = [s for s in data if s.get("连板数", 1) >= 2]
+    lianban = [slim(s) for s in lianban]
+    
+    # 首板股：只取封板资金前10名
+    shouban = [s for s in data if s.get("连板数", 1) == 1]
+    shouban.sort(key=lambda x: float(x.get("封板资金", "0").replace("亿", "") or 0), reverse=True)
+    shouban = [slim(s) for s in shouban[:10]]
+    
+    slim_data = {
+        "连板股": lianban,
+        "首板TOP10": shouban,
+        "总涨停数": len(data),
+        "总连板数": len(lianban),
+        "总首板数": len(data) - len(lianban)
+    }
+    
+    print(f"📊 数据精简: 连板{len(lianban)}只, 首板取前10只(共{len(data)-len(lianban)}只)")
+    # ===== 精简结束 =====
 
     prompt = f"""你是一位专业的A股短线打板交易员，请根据以下数据生成【连板打板策略报告】。
 
