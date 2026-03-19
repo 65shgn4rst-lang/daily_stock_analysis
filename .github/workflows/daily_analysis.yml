@@ -66,3 +66,14 @@ jobs:
             reports/
             data/
           retention-days: 30
+      - name: AI 分析生成报告
+        run: python .github/scripts/lianban_ai_analyze.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      - name: 推送报告到飞书
+        if: always()
+        run: |
+          python .github/scripts/send_feishu.py
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
