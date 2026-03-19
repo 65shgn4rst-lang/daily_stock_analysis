@@ -31,8 +31,8 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
-
+          pip install -r .github/scripts/requirements.txt
+          
       - name: 创建目录
         run: mkdir -p data reports logs
 
@@ -41,7 +41,7 @@ jobs:
           echo "=========================================="
           echo "📊 采集涨停/连板/市场情绪数据"
           echo "=========================================="
-          python scripts/collect_lianban_data.py
+          python .github/scripts/collect_lianban_data.py
 
       - name: AI 分析生成报告
         env:
@@ -55,7 +55,13 @@ jobs:
           echo "=========================================="
           echo "🤖 AI 连板分析"
           echo "=========================================="
-          python scripts/lianban_ai_analyze.py
+          python .github/scripts/lianban_ai_analyze.py
+      - name: 推送报告到飞书
+        if: always()
+        run: |
+          python .github/scripts/send_feishu.py
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
 
       - name: 上传报告
         uses: actions/upload-artifact@v4
