@@ -1,193 +1,227 @@
+#!/usr/bin/env python3
+"""连板打板 AI 分析"""
+
 import os
+import sys
 import json
-import glob
-import google-genai as genai
-from datetime import datetime
-import time
+import datetime
+import google.generativeai as genai
 
-def call_gemini_with_retry(model, prompt, max_retries=3):
-    for i in range(max_retries):
-        try:
-            response = model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            error_msg = str(e)
-            print(f"⚠️ 第{i+1}次请求失败: {error_msg}")
-            if "429" in error_msg or "quota" in error_msg.lower() or "resource" in error_msg.lower():
-                wait = 15 * (i + 1)
-                print(f"⏳ 等待{wait}秒后重试...")
-                time.sleep(wait)
-            else:
-                raise e
-    print("❌ 重试耗尽，尝试缩减内容后再请求")
-    return None
-def analyze():
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("❌ 未设置 GEMINI_API_KEY")
-        return
+LIANBAN_PROMPT = """你是一位专业的A股短线连板打板交易员，精通情绪周期理论和龙头战法。
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
-
-    today = datetime.now().strftime("%Y%m%d")
-    data_file = f"data/lianban_{today}.json"
-
-    if not os.path.exists(data_file):
-        print("❌ 未找到今日数据文件")
-        return
-
-    with open(data_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    # ===== 调试：看看数据到底长什么样 =====
-    print(f"📋 data 类型: {type(data)}")
-    print(f"📋 data 长度: {len(data)}")
-    if len(data) > 0:
-        print(f"📋 第一条类型: {type(data[0])}")
-        print(f"📋 第一条内容: {data[0]}")
-    
-    # 如果是双重编码的 JSON 字符串，再解析一次
-    if isinstance(data, str):
-        data = json.loads(data)
-    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], str):
-        data = [json.loads(s) for s in data]
-    # ===== 调试结束 =====
-    # ===== 新增：精简数据，降低 token 消耗 =====
-    # 保留的字段（去掉不需要的字段）
-    keep_fields = [
-        "股票代码", "股票名称", "连板数", "涨停价", "封板资金",
-        "换手率", "成交额", "首封时间", "炸板次数", "题材",
-        "流通市值", "涨幅"
-    ]
-    
-    def slim(stock):
-        """只保留关键字段"""
-        return {k: v for k, v in stock.items() if k in keep_fields}
-    
-    # 连板股：全部保留，但精简字段
-    lianban = [s for s in data if s.get("连板数", 1) >= 2]
-    lianban = [slim(s) for s in lianban]
-    
-    # 首板股：只取封板资金前10名
-    shouban = [s for s in data if s.get("连板数", 1) == 1]
-    shouban.sort(key=lambda x: float(x.get("封板资金", "0").replace("亿", "") or 0), reverse=True)
-    shouban = [slim(s) for s in shouban[:10]]
-    
-    slim_data = {
-        "连板股": lianban,
-        "首板TOP10": shouban,
-        "总涨停数": len(data),
-        "总连板数": len(lianban),
-        "总首板数": len(data) - len(lianban)
-    }
-    
-    print(f"📊 数据精简: 连板{len(lianban)}只, 首板取前10只(共{len(data)-len(lianban)}只)")
-    # ===== 精简结束 =====
-
-    prompt = f"""你是一位专业的A股短线打板交易员，请根据以下数据生成【连板打板策略报告】。
-
-## 数据
-{json.dumps(slim_data, ensure_ascii=False, indent=2)}
-
-## 报告格式要求（严格遵守）
-
-请用以下格式输出，注意用 emoji 和加粗突出重点：
+请根据以下今日市场数据，生成一份**连板打板策略报告**。
 
 ---
-
-# 🎯 连板打板策略报告 ({today})
-
-## 一、📊 情绪周期定位
-
-**🔴 当前阶段：** [退潮期/冰点期/修复期/升温期/高潮期]
-
-**核心数据看板：**
-| 指标 | 数值 | 评价 |
-|---|---|---|
-| 涨停数量 | xx | 🟢高/🟡中/🔴低 |
-| 炸板率 | xx% | 🟢低/🟡中/🔴高 |
-| 昨日晋级率 | xx% | 🟢高/🟡中/🔴低 |
-| 最高连板 | x板 | - |
-| 昨涨停今日均涨 | xx% | 🟢正/🔴负 |
-
-**与昨日对比：** 转暖/转冷/持平，一句话说明
-**明日情绪预判：** 一句话
-
+{market_data}
 ---
 
-## 二、🔥 主线题材研判
+## 分析要求（严格按以下框架输出）：
 
-对每个主线题材，用以下格式：
+### 一、情绪周期定位
+- 当前处于情绪周期的哪个阶段？（冰点→修复→上升→加速→高潮→分歧→退潮）
+- 判断依据：涨停数量、炸板率、晋级率、连板高度、涨跌停比
+- 与昨日对比情绪是转暖还是转冷？
+- 明日情绪预判
 
-### 【题材名称】⭐⭐⭐（1-5星持续性评级）
-- **驱动逻辑：** xxx
-- **持续性判断：** xxx
-- **梯队结构：** 龙头→二梯队→跟风
-- **明日关注：** xxx
+### 二、主线题材研判
+- 今日最强主线题材是什么？（1-3个）
+- 每个主线的驱动逻辑是什么？（政策/事件/资金）
+- 题材的持续性判断（一日游还是中期主线？）
+- 题材内部的梯队结构（龙头→二梯队→跟风）
 
----
+### 三、龙头股分析（最重要！）
+对连板梯队中**每一只2板及以上**的股票，逐一分析：
+- **身份定位**：是题材龙头？空间龙头？补涨龙？跟风？
+- **封板质量**：封单额大小、换手率高低、炸板次数、封板时间
+- **辨识度**：市场是否认可其龙头地位？有无竞争对手？
+- **明日策略**：
+  - 竞价预判（高开/平开/低开的概率）
+  - 什么情况下可以打板/追涨/低吸
+  - 什么情况下必须放弃
+  - 具体价位参考（强弱分界线）
 
-## 三、👑 龙头股分析
+### 四、首板股精选
+从今日首板股中选出**最值得关注的3-5只**：
+- 选股标准：题材正确、封板资金大、换手率适中、封板时间早
+- 说明每只的看点和风险
 
-对每只连板股（从最高板到2板），用以下格式：
+### 五、风险提示
+- 哪些连板股明日有断板风险？为什么？
+- 哪些板块可能退潮？
+- 需要回避的方向
 
-### 🏆 [N板] 股票名称(代码) | 题材
-> **一句话定位：** xxx
+### 六、明日操盘计划
+- 竞价阶段重点观察什么？
+- 开盘后的操作优先级
+- 仓位建议（根据情绪周期）
+- 止损纪律
 
-| 维度 | 详情 |
-|---|---|
-| 封板资金 | xx亿 |
-| 换手率 | xx% |
-| 成交额 | xx亿 |
-| 首封时间 | xx |
-| 炸板次数 | x次 |
-| 封板质量 | 🟢优/🟡中/🔴差 |
-
-**辨识度：** ⭐⭐⭐⭐ xxx
-**明日策略：**
-- 🟢 **打板/追涨条件：** xxx
-- 🔴 **放弃条件：** xxx
-- 📍 **关键价位：** xxx
-
----
-
-## 四、💡 首板重点关注
-
-从首板中选出最值得关注的3-5只，简要说明：
-| 股票 | 题材 | 封板资金 | 亮点 | 明日关注 |
-|---|---|---|---|---|
-
----
-
-## 五、⚡ 明日操作计划
-
-### 最优策略方向
-- **首选：** xxx
-- **备选：** xxx
-- **回避：** xxx
-
-### 仓位建议
-根据情绪周期给出建议仓位比例
-
----
-
-## 重要要求：
-1. 必须正确识别每只股票的连板天数，不能搞错
-2. 数据中 "连板数" 字段就是实际连板天数，直接使用
-3. 用 emoji 和加粗让关键信息一目了然
-4. 首板分析必须包含，选封板资金最大、题材最正的
-5. 每只股票的策略必须具体可执行，不要空话
+## 输出格式要求：
+- 使用 Markdown 格式
+- 观点明确，不要模棱两可
+- 每只股票给出**具体操作建议和价位**
+- 语言简洁专业，像给职业短线交易员的每日复盘
 """
 
-    response = model.generate_content(prompt)
-    report = response.text
+def load_market_data():
+    """加载连板数据"""
+    data_path = os.environ.get('LIANBAN_DATA_PATH', '')
+    
+    if not data_path:
+        # 查找最新的数据文件
+        data_dir = 'data'
+        if os.path.exists(data_dir):
+            files = [f for f in os.listdir(data_dir) if f.startswith('lianban_data_') and f.endswith('.md')]
+            if files:
+                files.sort(reverse=True)
+                data_path = os.path.join(data_dir, files[0])
+    
+    if not data_path or not os.path.exists(data_path):
+        print("❌ 未找到连板数据文件")
+        sys.exit(1)
+    
+    with open(data_path, 'r', encoding='utf-8') as f:
+        return f.read()
 
-    os.makedirs("reports", exist_ok=True)
-    report_path = f"reports/report_{today}.md"
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write(report)
-    print(f"✅ 报告已生成: {report_path}")
+def analyze_with_gemini(market_data):
+    """使用 Gemini 分析"""
+    api_key = os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
+        print("❌ 未设置 GEMINI_API_KEY")
+        sys.exit(1)
+    
+    model_name = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
+    
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+    
+    prompt = LIANBAN_PROMPT.format(market_data=market_data)
+    
+    print(f"🤖 使用 {model_name} 分析中...")
+    
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.3,
+            max_output_tokens=8000,
+        )
+    )
+    
+    return response.text
 
+def send_wechat(content):
+    """发送企业微信通知"""
+    import requests
+    webhook_url = os.environ.get('WECHAT_WEBHOOK_URL', '')
+    if not webhook_url:
+        return
+    
+    # 企业微信 Markdown 限制 4096 字节
+    if len(content.encode('utf-8')) > 4000:
+        # 分段发送
+        parts = split_content(content, 3800)
+        for i, part in enumerate(parts):
+            payload = {
+                "msgtype": "markdown",
+                "markdown": {"content": part}
+            }
+            try:
+                requests.post(webhook_url, json=payload, timeout=10)
+                print(f"✅ 企业微信第 {i+1} 段发送成功")
+            except Exception as e:
+                print(f"❌ 企业微信发送失败: {e}")
+    else:
+        payload = {
+            "msgtype": "markdown",
+            "markdown": {"content": content}
+        }
+        try:
+            requests.post(webhook_url, json=payload, timeout=10)
+            print("✅ 企业微信发送成功")
+        except Exception as e:
+            print(f"❌ 企业微信发送失败: {e}")
 
-if __name__ == "__main__":
-    analyze()
+def send_telegram(content):
+    """发送 Telegram 通知"""
+    import requests
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID', '')
+    if not bot_token or not chat_id:
+        return
+    
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    
+    # Telegram 限制 4096 字符，分段发送
+    parts = split_content(content, 4000)
+    for i, part in enumerate(parts):
+        payload = {
+            "chat_id": chat_id,
+            "text": part,
+            "parse_mode": "Markdown",
+        }
+        thread_id = os.environ.get('TELEGRAM_MESSAGE_THREAD_ID', '')
+        if thread_id:
+            payload["message_thread_id"] = int(thread_id)
+        
+        try:
+            requests.post(url, json=payload, timeout=10)
+            print(f"✅ Telegram 第 {i+1} 段发送成功")
+        except Exception as e:
+            print(f"❌ Telegram 发送失败: {e}")
+
+def split_content(content, max_bytes):
+    """按字节长度分割内容"""
+    parts = []
+    lines = content.split('\n')
+    current = []
+    current_len = 0
+    
+    for line in lines:
+        line_len = len(line.encode('utf-8')) + 1
+        if current_len + line_len > max_bytes and current:
+            parts.append('\n'.join(current))
+            current = [line]
+            current_len = line_len
+        else:
+            current.append(line)
+            current_len += line_len
+    
+    if current:
+        parts.append('\n'.join(current))
+    
+    return parts
+
+def main():
+    print("=" * 50)
+    print("🎯 连板打板 AI 分析系统")
+    print("=" * 50)
+    
+    # 加载数据
+    market_data = load_market_data()
+    print(f"📄 数据加载完成，长度: {len(market_data)} 字符")
+    
+    # AI 分析
+    report = analyze_with_gemini(market_data)
+    print(f"📝 分析报告生成完成，长度: {len(report)} 字符")
+    
+    # 保存报告
+    os.makedirs('reports', exist_ok=True)
+    date_str = os.environ.get('TRADE_DATE', datetime.datetime.now().strftime('%Y%m%d'))
+    report_path = f'reports/lianban_report_{date_str}.md'
+    
+    full_report = f"# 🎯 连板打板策略报告 ({date_str})\n\n{report}"
+    
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(full_report)
+    print(f"💾 报告已保存: {report_path}")
+    
+    # 发送通知
+    send_wechat(full_report)
+    send_telegram(full_report)
+    
+    # 输出到控制台
+    print("\n" + "=" * 50)
+    print(full_report)
+
+if __name__ == '__main__':
+    main()
