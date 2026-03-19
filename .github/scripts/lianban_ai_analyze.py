@@ -211,32 +211,24 @@ def find_latest_data():
 
 
 def call_gemini(market_data):
-    today = datetime.now().strftime("%Y%m%d")
-
-    # 🔑 关键：补充缺失的市场数据
-    print("正在获取补充市场数据...")
-    extra_data = get_supplementary_data()
-    full_data = extra_data + "\n\n" + market_data
-    
-    # 打印确认数据完整性
-    print(f"数据总长度: {len(full_data)} 字符")
-    print("--- 数据预览前500字 ---")
-    print(full_data[:500])
-    print("--- 预览结束 ---")
+    """调用 Gemini API"""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        print("❌ 未设置 GEMINI_API_KEY")
+        sys.exit(1)
 
     model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
+    print(f"🤖 调用 {model_name} 分析中...")
+
+    client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model_name,
-        contents=REPORT_PROMPT_TEMPLATE.format(
-            market_data=full_data,
-            date=today
-        ),
-        config=genai.types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
+        contents=PROMPT.format(market_data=market_data),
+        config=types.GenerateContentConfig(
             temperature=0.3,
-        )
+            max_output_tokens=8000,
+        ),
     )
     return response.text
 
