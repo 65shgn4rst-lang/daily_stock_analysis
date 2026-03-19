@@ -1,130 +1,35 @@
 import os
 import json
-import time
+import glob
 import google.generativeai as genai
 from datetime import datetime
+import time
 
+def call_gemini_with_retry(model, prompt, max_retries=3):
+    for i in range(max_retries):
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            error_msg = str(e)
+            print(f"⚠️ 第{i+1}次请求失败: {error_msg}")
+            if "429" in error_msg or "quota" in error_msg.lower() or "resource" in error_msg.lower():
+                wait = 15 * (i + 1)
+                print(f"⏳ 等待{wait}秒后重试...")
+                time.sleep(wait)
+            else:
+                raise e
+    print("❌ 重试耗尽，尝试缩减内容后再请求")
+    return None
+def analyze():
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("❌ 未设置 GEMINI_API_KEY")
+        return
 
-# ========== AI 提供商定义 ==========
-
-def call_gemini(api_key, prompt):
-    """Google Gemini"""
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel("gemini-2.0-flash")
-    response = model.generate_content(prompt)
-    return response.text
 
-
-def call_deepseek(api_key, prompt):
-    """DeepSeek（超便宜，中文好）"""
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(
-        model="deepseek-chat",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4096
-    )
-    return response.choices[0].message.content
-
-
-def call_qwen(api_key, prompt):
-    """通义千问（阿里，中文好）"""
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
-    response = client.chat.completions.create(
-        model="qwen-plus",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4096
-    )
-    return response.choices[0].message.content
-
-
-def call_openai(api_key, prompt):
-    """OpenAI"""
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4096
-    )
-    return response.choices[0].message.content
-
-
-# ========== 自动发现可用的 AI ==========
-
-def get_providers():
-    providers = []
-
-    # Gemini（支持多个 key 轮换）
-    for key_name in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3"]:
-        api_key = os.environ.get(key_name)
-        if api_key:
-            providers.append({
-                "name": f"Gemini({key_name})",
-                "func": call_gemini,
-                "api_key": api_key
-            })
-
-    # DeepSeek
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if api_key:
-        providers.append({
-            "name": "DeepSeek",
-            "func": call_deepseek,
-            "api_key": api_key
-        })
-
-    # 通义千问
-    api_key = os.environ.get("QWEN_API_KEY")
-    if api_key:
-        providers.append({
-            "name": "通义千问",
-            "func": call_qwen,
-            "api_key": api_key
-        })
-
-    # OpenAI
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if api_key:
-        providers.append({
-            "name": "OpenAI",
-            "func": call_openai,
-            "api_key": api_key
-        })
-
-    return providers
-
-
-def call_ai_with_fallback(prompt):
-    """按顺序尝试所有 AI，直到成功"""
-    providers = get_providers()
-
-    if not providers:
-        print("❌ 未配置任何 AI API Key")
-        return None
-
-    print(f"📋 已配置 {len(providers)} 个AI: {', '.join(p['name'] for p in providers)}")
-
-    for i, provider in enumerate(providers):
-        print(f"\n🔄 [{i+1}/{len(providers)}] 尝试 {provider['name']}...")
-        try:
-            result = provider["func"](provider["api_key"], prompt)
-            print(f"✅ {provider['name']} 成功!")
-            return result
-        except Exception as e:
-            print(f"⚠️ {provider['name']} 失败: {str(e)[:200]}")
-            if i < len(providers) - 1:
-                print("⏳ 5秒后尝试下一个...")
-                time.sleep(5)
-
-    print("❌ 所有AI提供商均失败")
-    return None
-
-
-# ========== 主逻辑 ==========
-
-def analyze():
     today = datetime.now().strftime("%Y%m%d")
     data_file = f"data/lianban_{today}.json"
 
@@ -134,24 +39,30 @@ def analyze():
 
     with open(data_file, "r", encoding="utf-8") as f:
         data = json.load(f)
+with open(data_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
 
-    # ===== 精简数据 =====
+    # ===== 新增：精简数据，降低 token 消耗 =====
+    # 保留的字段（去掉不需要的字段）
     keep_fields = [
         "股票代码", "股票名称", "连板数", "涨停价", "封板资金",
         "换手率", "成交额", "首封时间", "炸板次数", "题材",
         "流通市值", "涨幅"
     ]
-
+    
     def slim(stock):
+        """只保留关键字段"""
         return {k: v for k, v in stock.items() if k in keep_fields}
-
+    
+    # 连板股：全部保留，但精简字段
     lianban = [s for s in data if s.get("连板数", 1) >= 2]
     lianban = [slim(s) for s in lianban]
-
+    
+    # 首板股：只取封板资金前10名
     shouban = [s for s in data if s.get("连板数", 1) == 1]
-    shouban.sort(key=lambda x: float(str(x.get("封板资金", "0")).replace("亿", "") or 0), reverse=True)
+    shouban.sort(key=lambda x: float(x.get("封板资金", "0").replace("亿", "") or 0), reverse=True)
     shouban = [slim(s) for s in shouban[:10]]
-
+    
     slim_data = {
         "连板股": lianban,
         "首板TOP10": shouban,
@@ -159,8 +70,9 @@ def analyze():
         "总连板数": len(lianban),
         "总首板数": len(data) - len(lianban)
     }
-
-    print(f"📊 数据精简: 连板{len(lianban)}只, 首板取前10(共{len(data)-len(lianban)}只)")
+    
+    print(f"📊 数据精简: 连板{len(lianban)}只, 首板取前10只(共{len(data)-len(lianban)}只)")
+    # ===== 精简结束 =====
 
     prompt = f"""你是一位专业的A股短线打板交易员，请根据以下数据生成【连板打板策略报告】。
 
@@ -195,6 +107,8 @@ def analyze():
 
 ## 二、🔥 主线题材研判
 
+对每个主线题材，用以下格式：
+
 ### 【题材名称】⭐⭐⭐（1-5星持续性评级）
 - **驱动逻辑：** xxx
 - **持续性判断：** xxx
@@ -204,6 +118,8 @@ def analyze():
 ---
 
 ## 三、👑 龙头股分析
+
+对每只连板股（从最高板到2板），用以下格式：
 
 ### 🏆 [N板] 股票名称(代码) | 题材
 > **一句话定位：** xxx
@@ -227,6 +143,7 @@ def analyze():
 
 ## 四、💡 首板重点关注
 
+从首板中选出最值得关注的3-5只，简要说明：
 | 股票 | 题材 | 封板资金 | 亮点 | 明日关注 |
 |---|---|---|---|---|
 
@@ -245,15 +162,15 @@ def analyze():
 ---
 
 ## 重要要求：
-1. 数据中 "连板数" 字段就是实际连板天数，直接使用
-2. 用 emoji 和加粗让关键信息一目了然
-3. 每只股票的策略必须具体可执行
+1. 必须正确识别每只股票的连板天数，不能搞错
+2. 数据中 "连板数" 字段就是实际连板天数，直接使用
+3. 用 emoji 和加粗让关键信息一目了然
+4. 首板分析必须包含，选封板资金最大、题材最正的
+5. 每只股票的策略必须具体可执行，不要空话
 """
 
-    report = call_ai_with_fallback(prompt)
-    if not report:
-        print("❌ AI生成失败")
-        return
+    response = model.generate_content(prompt)
+    report = response.text
 
     os.makedirs("reports", exist_ok=True)
     report_path = f"reports/report_{today}.md"
