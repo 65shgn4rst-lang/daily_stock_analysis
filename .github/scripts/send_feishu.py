@@ -1,76 +1,93 @@
+#!/usr/bin/env python3
+"""推送分析报告到飞书 Webhook"""
+
 import os
-import json
-import requests
+import sys
 import glob
+import requests
 
-def send_feishu():
-    webhook = os.environ.get("FEISHU_WEBHOOK")
-    if not webhook:
-        print("❌ 未设置 FEISHU_WEBHOOK")
+
+def find_latest_report():
+    """查找最新报告"""
+    files = glob.glob("reports/lianban_report_*.md")
+    if not files:
+        return None
+    files.sort(reverse=True)
+    return files[0]
+
+
+def split_text(text, max_len=3800):
+    """按行拆分长文本，每段不超过 max_len 字节"""
+    parts = []
+    current = []
+    current_len = 0
+
+    for line in text.split("\n"):
+        line_bytes = len(line.encode("utf-8")) + 1
+        if current_len + line_bytes > max_len and current:
+            parts.append("\n".join(current))
+            current = [line]
+            current_len = line_bytes
+        else:
+            current.append(line)
+            current_len += line_bytes
+
+    if current:
+        parts.append("\n".join(current))
+    return parts
+
+
+def send_feishu(webhook_url, content):
+    """发送到飞书，自动拆分长消息"""
+    parts = split_text(content)
+    total = len(parts)
+
+    for i, part in enumerate(parts):
+        title = "连板打板策略报告" + (f"（第{i+1}/{total}段）" if total > 1 else "")
+        payload = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": title},
+                    "template": "red",
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": part},
+                    }
+                ],
+            },
+        }
+
+        try:
+            resp = requests.post(webhook_url, json=payload, timeout=15)
+            result = resp.json()
+            if result.get("code") == 0:
+                print(f"  ✅ 第 {i+1}/{total} 段发送成功")
+            else:
+                print(f"  ❌ 飞书返回错误: {result}")
+        except Exception as e:
+            print(f"  ❌ 发送失败: {e}")
+
+
+def main():
+    webhook_url = os.environ.get("FEISHU_WEBHOOK", "")
+    if not webhook_url:
+        print("⚠️ 未设置 FEISHU_WEBHOOK，跳过推送")
         return
 
-    report_files = sorted(glob.glob("reports/*.md"), reverse=True)
-    if not report_files:
-        send_text(webhook, "⚠️ 今日未生成分析报告")
+    report_path = find_latest_report()
+    if not report_path:
+        print("⚠️ 未找到报告文件，跳过推送")
         return
 
-    with open(report_files[0], "r", encoding="utf-8") as f:
+    with open(report_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # 飞书卡片 markdown 限制约4000字符，超长则分段发送
-    if len(content) <= 4000:
-        send_card(webhook, content)
-    else:
-        chunks = split_content(content, 3800)
-        for i, chunk in enumerate(chunks):
-            title = f"📊 每日连板分析报告 ({i+1}/{len(chunks)})"
-            send_card(webhook, chunk, title)
-
-    print("✅ 飞书推送完成")
-
-
-def split_content(text, max_len):
-    """按章节分割"""
-    sections = text.split("\n## ")
-    chunks = []
-    current = ""
-    for sec in sections:
-        piece = ("## " + sec) if chunks or current else sec
-        if len(current) + len(piece) > max_len:
-            if current:
-                chunks.append(current)
-            current = piece
-        else:
-            current += "\n" + piece
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def send_card(webhook, content, title="📊 每日连板股分析报告"):
-    payload = {
-        "msg_type": "interactive",
-        "card": {
-            "header": {
-                "title": {"tag": "plain_text", "content": title},
-                "template": "blue"
-            },
-            "elements": [
-                {"tag": "markdown", "content": content}
-            ]
-        }
-    }
-    resp = requests.post(webhook, headers={"Content-Type": "application/json"}, data=json.dumps(payload))
-    if resp.status_code == 200 and resp.json().get("code") == 0:
-        print(f"✅ 发送成功: {title}")
-    else:
-        print(f"❌ 发送失败: {resp.text}")
-
-
-def send_text(webhook, text):
-    payload = {"msg_type": "text", "content": {"text": text}}
-    requests.post(webhook, headers={"Content-Type": "application/json"}, data=json.dumps(payload))
+    print(f"📤 推送: {report_path} ({len(content)} 字符)")
+    send_feishu(webhook_url, content)
 
 
 if __name__ == "__main__":
-    send_feishu()
+    main()
