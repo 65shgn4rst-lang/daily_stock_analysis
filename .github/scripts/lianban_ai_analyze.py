@@ -247,7 +247,7 @@ def analyze_with_gemini(market_overview, lianban_data):
         prompt,
         generation_config=genai.types.GenerationConfig(
             temperature=0.3,
-            max_output_tokens=8000,
+            max_output_tokens=16000,
         )
     )
 
