@@ -39,8 +39,6 @@ def analyze():
 
     with open(data_file, "r", encoding="utf-8") as f:
         data = json.load(f)
-with open(data_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
 
     # ===== 新增：精简数据，降低 token 消耗 =====
     # 保留的字段（去掉不需要的字段）
