@@ -31,7 +31,7 @@ jobs:
       - name: 安装依赖
         run: |
           pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r .github/scripts/requirements.txt
 
       - name: 创建目录
         run: mkdir -p data reports logs
