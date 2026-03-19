@@ -8,7 +8,7 @@ import datetime
 
 from google import genai
 from google.genai import types
-
+PROMPT = REPORT_PROMPT_TEMPLATE
 # ===== 分析提示词 =====
 SYSTEM_PROMPT = """你是一位严谨的A股连板打板策略分析师。
 
