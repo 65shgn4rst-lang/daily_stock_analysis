@@ -52,9 +52,42 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 创建必要目录
+       - name: 创建必要目录
         run: |
           mkdir -p data logs reports
+      
+      - name: 获取今日涨停股
+        id: zt_stocks
+        run: |
+          echo "=========================================="
+          echo "🔥 获取今日涨停股票"
+          echo "=========================================="
+          ZT_STOCKS=$(python -c "
+          import akshare as ak
+          import datetime, sys
+          today = datetime.datetime.now().strftime('%Y%m%d')
+          max_count = int('${ZT_MAX_COUNT:-10}')
+          for date_str in [today, (datetime.datetime.now() - datetime.timedelta(days=1)).strftime('%Y%m%d')]:
+              try:
+                  df = ak.stock_zt_pool_em(date=date_str)
+                  if df is not None and not df.empty:
+                      if '封单额' in df.columns:
+                          df = df.sort_values('封单额', ascending=False)
+                      codes = df['代码'].tolist()[:max_count]
+                      print(','.join(codes))
+                      print(f'日期={date_str} 共{len(codes)}只', file=sys.stderr)
+                      sys.exit(0)
+              except Exception as e:
+                  print(f'{date_str}失败: {e}', file=sys.stderr)
+          sys.exit(1)
+          " 2>&1 | tee /dev/stderr | grep -E '^[0-9]' || echo "")
+          
+          if [ -n "$ZT_STOCKS" ]; then
+            echo "ZT_STOCK_LIST=$ZT_STOCKS" >> $GITHUB_ENV
+            echo "✅ 涨停股: $ZT_STOCKS"
+          else
+            echo "⚠️ 未获取到涨停股，使用默认自选股"
+          fi
       
       - name: 执行股票分析
         env:
@@ -154,7 +187,7 @@ jobs:
           # ==========================================
           # 自选股配置
           # ==========================================
-          STOCK_LIST: ${{ vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
+          STOCK_LIST: ${{ env.ZT_STOCK_LIST || vars.STOCK_LIST || secrets.STOCK_LIST || '600519' }}
           MARKET_REVIEW_REGION: ${{ vars.MARKET_REVIEW_REGION || secrets.MARKET_REVIEW_REGION || 'cn' }}
           
           # ==========================================
