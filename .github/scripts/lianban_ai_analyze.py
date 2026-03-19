@@ -5,6 +5,7 @@ import os
 import sys
 import glob
 import datetime
+import akshare as ak
 
 from google import genai
 from google.genai import types
@@ -103,7 +104,101 @@ PROMPT = """你是一位严谨的A股连板打板策略分析师。
 ---
 *⚠️ AI辅助分析，仅供参考，不构成投资建议。*
 """
+def get_supplementary_data():
+    """获取AI分析所需的补充数据：指数、涨跌家数、首板"""
+    sections = []
+    today = datetime.now().strftime("%Y%m%d")
 
+    # ===== 1. 三大指数 =====
+    sections.append("=" * 50)
+    sections.append("【大盘指数表现】")
+    sections.append("=" * 50)
+    try:
+        df = ak.stock_zh_index_spot_em()
+        for name in ["上证指数", "深证成指", "创业板指"]:
+            row = df[df["名称"] == name]
+            if not row.empty:
+                r = row.iloc[0]
+                price = r.get("最新价", "N/A")
+                chg = r.get("涨跌幅", 0)
+                chg_val = r.get("涨跌额", 0)
+                sections.append(f"  {name}: {price}  涨跌额:{chg_val:+.2f}  涨跌幅:{chg:+.2f}%")
+        print("[OK] 指数数据获取成功")
+    except Exception as e:
+        sections.append(f"  获取失败: {e}")
+        print(f"[WARN] 指数数据获取失败: {e}")
+
+    # ===== 2. 全市场涨跌家数 =====
+    sections.append("")
+    sections.append("=" * 50)
+    sections.append("【全市场个股涨跌统计】")
+    sections.append("=" * 50)
+    try:
+        df = ak.stock_zh_a_spot_em()
+        total = len(df)
+        up = int((df["涨跌幅"] > 0).sum())
+        down = int((df["涨跌幅"] < 0).sum())
+        flat = int((df["涨跌幅"] == 0).sum())
+        up_gt5 = int((df["涨跌幅"] > 5).sum())
+        down_gt5 = int((df["涨跌幅"] < -5).sum())
+        sections.append(f"  总股票数: {total}")
+        sections.append(f"  上涨: {up}家 ({up/total*100:.1f}%)")
+        sections.append(f"  下跌: {down}家 ({down/total*100:.1f}%)")
+        sections.append(f"  平盘: {flat}家")
+        sections.append(f"  涨跌比: {up}:{down}")
+        sections.append(f"  涨幅>5%: {up_gt5}家")
+        sections.append(f"  跌幅>5%: {down_gt5}家")
+        if down > up:
+            sections.append(f"  ⚠️ 下跌家数远超上涨家数，市场整体偏弱")
+        print(f"[OK] 涨跌家数: 涨{up} 跌{down}")
+    except Exception as e:
+        sections.append(f"  获取失败: {e}")
+        print(f"[WARN] 涨跌数据获取失败: {e}")
+
+    # ===== 3. 首板涨停股 =====
+    sections.append("")
+    sections.append("=" * 50)
+    sections.append("【今日首板涨停股】")
+    sections.append("=" * 50)
+    try:
+        df_zt = ak.stock_zt_pool_em(date=today)
+        print(f"[DEBUG] 涨停池列名: {list(df_zt.columns)}")
+        
+        # 筛选首板（连板数==1）
+        if "连板数" in df_zt.columns:
+            first_board = df_zt[df_zt["连板数"] == 1].copy()
+        else:
+            # 如果没有连板数列，全部当首板处理
+            first_board = df_zt.copy()
+
+        sections.append(f"  首板涨停共 {len(first_board)} 只")
+        sections.append("")
+
+        for _, r in first_board.iterrows():
+            name = r.get("名称", "")
+            code = r.get("代码", "")
+            reason = r.get("涨停原因", "无")
+            seal = r.get("封单额", 0)
+            seal_str = f"{seal/1e8:.2f}亿" if seal else "N/A"
+            turnover = r.get("换手率", 0)
+            first_time = r.get("首次封板时间", "N/A")
+            last_time = r.get("最终封板时间", "N/A")
+            zb_count = r.get("炸板次数", 0)
+            amount = r.get("成交额", 0)
+            amount_str = f"{amount/1e8:.2f}亿" if amount else "N/A"
+
+            sections.append(
+                f"  {name}({code}) | 原因:{reason} | "
+                f"封单:{seal_str} | 换手:{turnover:.1f}% | "
+                f"首封:{first_time} | 末封:{last_time} | "
+                f"炸板:{zb_count}次 | 成交:{amount_str}"
+            )
+        print(f"[OK] 首板涨停: {len(first_board)}只")
+    except Exception as e:
+        sections.append(f"  获取失败: {e}")
+        print(f"[WARN] 首板数据获取失败: {e}")
+
+    return "\n".join(sections)
 
 
 def find_latest_data():
@@ -116,24 +211,32 @@ def find_latest_data():
 
 
 def call_gemini(market_data):
-    """调用 Gemini API"""
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        print("❌ 未设置 GEMINI_API_KEY")
-        sys.exit(1)
+    today = datetime.now().strftime("%Y%m%d")
+
+    # 🔑 关键：补充缺失的市场数据
+    print("正在获取补充市场数据...")
+    extra_data = get_supplementary_data()
+    full_data = extra_data + "\n\n" + market_data
+    
+    # 打印确认数据完整性
+    print(f"数据总长度: {len(full_data)} 字符")
+    print("--- 数据预览前500字 ---")
+    print(full_data[:500])
+    print("--- 预览结束 ---")
 
     model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-    print(f"🤖 调用 {model_name} 分析中...")
-
-    client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model_name,
-        contents=PROMPT.format(market_data=market_data),
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=8000,
+        contents=REPORT_PROMPT_TEMPLATE.format(
+            market_data=full_data,
+            date=today
         ),
+        config=genai.types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.3,
+        )
     )
     return response.text
 
