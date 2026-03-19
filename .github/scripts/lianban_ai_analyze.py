@@ -111,22 +111,24 @@ def find_latest_data():
 
 
 def call_gemini(market_data):
-    today = datetime.now().strftime("%Y%m%d")
-    
+    """调用 Gemini API"""
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        print("❌ 未设置 GEMINI_API_KEY")
+        sys.exit(1)
+
     model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
-    
-    client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
-    
+
+    print(f"🤖 调用 {model_name} 分析中...")
+
+    client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=model_name,
-        contents=REPORT_PROMPT_TEMPLATE.format(
-            market_data=market_data,
-            date=today
+        contents=PROMPT.format(market_data=market_data),
+        config=types.GenerateContentConfig(
+            temperature=0.3,
+            max_output_tokens=8000,
         ),
-        config=genai.types.GenerateContentConfig(
-            system_instruction=SYSTEM_PROMPT,
-            temperature=0.3,  # 降低温度，减少胡说
-        )
     )
     return response.text
 
