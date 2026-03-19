@@ -1,5 +1,3 @@
-akshare
-google-genai
-requests
-pandas
-tabulate
+akshare>=1.14.0
+google-generativeai>=0.8.0
+requests>=2.31.0
