@@ -2,7 +2,6 @@ name: 连板打板每日分析
 
 on:
   schedule:
-    # 北京时间 15:30 收盘后运行（UTC+8 → UTC 07:30）
     - cron: '30 7 * * 1-5'
   workflow_dispatch:
 
@@ -34,28 +33,22 @@ jobs:
           pip install -r .github/scripts/requirements.txt
 
       - name: 创建目录
-        run: mkdir -p data reports logs
+        run: mkdir -p data reports
 
       - name: 采集连板数据
-        run: |
-          echo "=========================================="
-          echo "📊 采集涨停/连板/市场情绪数据"
-          echo "=========================================="
-          python .github/scripts/collect_lianban_data.py
+        run: python .github/scripts/collect_lianban_data.py
 
       - name: AI 分析生成报告
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
-          WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_MESSAGE_THREAD_ID: ${{ secrets.TELEGRAM_MESSAGE_THREAD_ID }}
-        run: |
-          echo "=========================================="
-          echo "🤖 AI 连板分析"
-          echo "=========================================="
-          python .github/scripts/lianban_ai_analyze.py
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+        run: python .github/scripts/lianban_ai_analyze.py
+
+      - name: 推送报告到飞书
+        if: always()
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: python .github/scripts/send_feishu.py
 
       - name: 上传报告
         uses: actions/upload-artifact@v4
@@ -66,14 +59,3 @@ jobs:
             reports/
             data/
           retention-days: 30
-      - name: AI 分析生成报告
-        run: python .github/scripts/lianban_ai_analyze.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-
-      - name: 推送报告到飞书
-        if: always()
-        run: |
-          python .github/scripts/send_feishu.py
-        env:
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
