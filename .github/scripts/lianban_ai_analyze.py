@@ -71,7 +71,7 @@ def load_market_data():
         # 查找最新的数据文件
         data_dir = 'data'
         if os.path.exists(data_dir):
-            files = [f for f in os.listdir(data_dir) if f.startswith('lianban_data_') and f.endswith('.md')]
+            files = [f for f in os.listdir(data_dir) if f.startswith('lianban_data_')]
             if files:
                 files.sort(reverse=True)
                 data_path = os.path.join(data_dir, files[0])
