@@ -1,7 +1,7 @@
 import os
 import json
 import glob
-import google.generativeai as genai
+import google-genai as genai
 from datetime import datetime
 import time
 
@@ -39,7 +39,19 @@ def analyze():
 
     with open(data_file, "r", encoding="utf-8") as f:
         data = json.load(f)
-
+    # ===== 调试：看看数据到底长什么样 =====
+    print(f"📋 data 类型: {type(data)}")
+    print(f"📋 data 长度: {len(data)}")
+    if len(data) > 0:
+        print(f"📋 第一条类型: {type(data[0])}")
+        print(f"📋 第一条内容: {data[0]}")
+    
+    # 如果是双重编码的 JSON 字符串，再解析一次
+    if isinstance(data, str):
+        data = json.loads(data)
+    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], str):
+        data = [json.loads(s) for s in data]
+    # ===== 调试结束 =====
     # ===== 新增：精简数据，降低 token 消耗 =====
     # 保留的字段（去掉不需要的字段）
     keep_fields = [
