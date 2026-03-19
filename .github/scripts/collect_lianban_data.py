@@ -1,112 +1,131 @@
-import akshare as ak
-import json
+#!/usr/bin/env python3
+"""采集A股涨停/连板/炸板/跌停数据，保存为 Markdown"""
+
 import os
-from datetime import datetime
+import datetime
+import akshare as ak
+import pandas as pd
 
-def collect_data():
-    today = datetime.now().strftime("%Y%m%d")
-    result = {
-        "date": today,
-        "overview": {},
-        "lianban": {},    # 2板及以上
-        "shouban": [],    # 首板
-    }
 
-    # ========== 涨停板数据 ==========
+def get_trade_date():
+    """获取交易日期（北京时间，周末自动回退到周五）"""
+    env_date = os.environ.get("TRADE_DATE", "")
+    if env_date:
+        return env_date
+
+    bj = datetime.timezone(datetime.timedelta(hours=8))
+    now = datetime.datetime.now(bj)
+    wd = now.weekday()
+    if wd == 5:
+        now -= datetime.timedelta(days=1)
+    elif wd == 6:
+        now -= datetime.timedelta(days=2)
+    return now.strftime("%Y%m%d")
+
+
+def safe_collect(name, func, date_str):
+    """安全采集，失败返回空 DataFrame"""
     try:
-        df = ak.stock_zt_pool_em(date=today)
-        total_zt = len(df)
-        result["overview"]["涨停数量"] = total_zt
-
-        # 炸板数据
-        try:
-            df_zb = ak.stock_zt_pool_zbgc_em(date=today)
-            zb_count = len(df_zb)
-        except:
-            zb_count = 0
-        result["overview"]["炸板数量"] = zb_count
-        result["overview"]["炸板率"] = f"{round(zb_count/(total_zt+zb_count)*100, 1)}%" if (total_zt+zb_count) > 0 else "0%"
-
-        # ===== 关键修复：用连板天数字段正确分类 =====
-        if "连板数" in df.columns:
-            board_col = "连板数"
-        elif "连续涨停天数" in df.columns:
-            board_col = "连续涨停天数"
+        df = func(date=date_str)
+        if df is not None and not df.empty:
+            print(f"  ✅ {name}: {len(df)} 条")
+            return df
         else:
-            board_col = None
-
-        max_board = 0
-        if board_col:
-            for _, row in df.iterrows():
-                board_num = int(row[board_col])
-                name = row["名称"]
-                code = row["代码"]
-
-                stock_info = {
-                    "代码": code,
-                    "名称": name,
-                    "连板数": board_num,
-                    "封板资金": round(row.get("封板资金", 0) / 1e8, 2),
-                    "换手率": round(row.get("换手率", 0), 2),
-                    "成交额": round(row.get("成交额", 0) / 1e8, 2),
-                    "首次封板时间": str(row.get("首次封板时间", "")),
-                    "炸板次数": int(row.get("炸板次数", 0)),
-                    "涨停原因": str(row.get("涨停原因", "")),
-                }
-
-                if board_num >= 2:
-                    key = f"{board_num}板"
-                    if key not in result["lianban"]:
-                        result["lianban"][key] = []
-                    result["lianban"][key].append(stock_info)
-                else:
-                    result["shouban"].append(stock_info)
-
-                max_board = max(max_board, board_num)
-
-        result["overview"]["最高连板"] = max_board
-        result["overview"]["连板晋级率"] = calc_promotion_rate(result["lianban"])
-
-        # 昨日涨停股今日表现
-        try:
-            df_next = ak.stock_zt_pool_previous_em(date=today)
-            if len(df_next) > 0:
-                avg_change = round(df_next["涨跌幅"].mean(), 2)
-                result["overview"]["昨日涨停今日均涨"] = f"{avg_change}%"
-            else:
-                result["overview"]["昨日涨停今日均涨"] = "无数据"
-        except:
-            result["overview"]["昨日涨停今日均涨"] = "获取失败"
-
-        # 首板按封板资金排序，取前10
-        result["shouban"] = sorted(result["shouban"], key=lambda x: x["封板资金"], reverse=True)[:10]
-
+            print(f"  ⚠️ {name}: 无数据")
     except Exception as e:
-        print(f"❌ 数据采集出错: {e}")
-        return None
+        print(f"  ❌ {name} 失败: {e}")
+    return pd.DataFrame()
 
-    # 保存
+
+def df_to_md(df):
+    """DataFrame 转 Markdown 表格"""
+    if df.empty:
+        return "（无数据）\n"
+    try:
+        return df.to_markdown(index=False) + "\n"
+    except Exception:
+        return df.to_string(index=False) + "\n"
+
+
+def calc_stats(zt_df, zb_df, dt_df):
+    """计算市场情绪统计"""
+    zt = len(zt_df)
+    zb = len(zb_df)
+    dt = len(dt_df)
+    zb_rate = round(zb / (zt + zb) * 100, 1) if (zt + zb) > 0 else 0
+
+    lines = [
+        f"- 涨停数量: {zt}",
+        f"- 炸板数量: {zb}",
+        f"- 炸板率: {zb_rate}%",
+        f"- 跌停数量: {dt}",
+        f"- 涨跌停比: {zt}:{dt}",
+    ]
+
+    # 连板梯队
+    if not zt_df.empty:
+        lb_col = next((c for c in zt_df.columns if "连板" in str(c)), None)
+        name_col = next((c for c in zt_df.columns if "名称" in str(c)), None)
+        if lb_col and name_col:
+            zt_df[lb_col] = pd.to_numeric(zt_df[lb_col], errors="coerce").fillna(1).astype(int)
+            max_lb = zt_df[lb_col].max()
+            lines.append(f"- 最高连板: {max_lb} 板")
+            for n in range(int(max_lb), 1, -1):
+                names = zt_df.loc[zt_df[lb_col] == n, name_col].tolist()
+                if names:
+                    lines.append(f"- {n}板({len(names)}只): {', '.join(names)}")
+
+    return "\n".join(lines)
+
+
+def main():
+    date_str = get_trade_date()
+    print(f"📅 交易日期: {date_str}")
+    print(f"📊 开始采集数据...\n")
+
+    # ===== 采集 =====
+    print("1️⃣ 涨停股池")
+    zt_df = safe_collect("涨停池", ak.stock_zt_pool_em, date_str)
+
+    print("2️⃣ 炸板股池")
+    zb_df = safe_collect("炸板池", ak.stock_zt_pool_zbgc_em, date_str)
+
+    print("3️⃣ 跌停股池")
+    dt_df = safe_collect("跌停池", ak.stock_zt_pool_dtgc_em, date_str)
+
+    # ===== 生成 Markdown =====
+    stats = calc_stats(zt_df, zb_df, dt_df)
+
+    md = f"""# A股连板数据 {date_str}
+
+## 一、市场情绪概览
+
+{stats}
+
+## 二、涨停股池
+
+{df_to_md(zt_df)}
+
+## 三、炸板股池
+
+{df_to_md(zb_df)}
+
+## 四、跌停股池
+
+{df_to_md(dt_df)}
+"""
+
+    # ===== 保存 =====
     os.makedirs("data", exist_ok=True)
-    filepath = f"data/lianban_{today}.json"
+    filepath = f"data/lianban_data_{date_str}.md"
     with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"✅ 数据已保存: {filepath}")
-    return result
+        f.write(md)
 
+    print(f"\n💾 已保存: {filepath} ({len(md)} 字符)")
 
-def calc_promotion_rate(lianban):
-    """计算连板晋级率"""
-    rates = {}
-    sorted_keys = sorted(lianban.keys(), key=lambda x: int(x.replace("板", "")))
-    for i in range(len(sorted_keys) - 1):
-        curr = sorted_keys[i]
-        next_key = sorted_keys[i + 1]
-        curr_count = len(lianban[curr])
-        next_count = len(lianban[next_key])
-        if curr_count > 0:
-            rates[f"{curr}→{next_key}"] = f"{round(next_count/curr_count*100, 1)}%"
-    return rates
+    if zt_df.empty and zb_df.empty and dt_df.empty:
+        print("⚠️ 所有数据为空，可能不是交易日")
 
 
 if __name__ == "__main__":
-    collect_data()
+    main()
