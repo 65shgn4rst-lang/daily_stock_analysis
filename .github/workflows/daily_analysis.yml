@@ -76,4 +76,4 @@ jobs:
         run: |
           python .github/scripts/send_feishu.py
         env:
-          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK_URL }}
