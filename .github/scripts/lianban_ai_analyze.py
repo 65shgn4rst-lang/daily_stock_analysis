@@ -79,7 +79,7 @@ def call_gemini(market_data):
         print("❌ 未设置 GEMINI_API_KEY")
         sys.exit(1)
 
-    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
     print(f"🤖 调用 {model_name} 分析中...")
 
